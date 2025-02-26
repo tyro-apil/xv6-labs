@@ -10,5 +10,5 @@ main(int argc, char *argv[])
     }
     int secs=atoi(argv[1]);
     sleep(secs);
-    exit(0);
+    exit(0); 
 }
