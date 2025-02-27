@@ -24,7 +24,8 @@ main(void)
   dup(0);  // stderr
 
   for(;;){
-    printf("init: starting team-A3 xv6\n");
+    printf("init: Starting team-A3 xv6\n");
+    printf("#### Welcome to A3's xv6 Operating System ####\n");
     pid = fork();
     if(pid < 0){
       printf("init: fork failed\n");
