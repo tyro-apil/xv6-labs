@@ -38,9 +38,35 @@ main(int argc, char *argv[])
             line[j++]=c;
         }
     }
+    // buf[count] = (char *)malloc(j+1);
+    buf[count] = 0;
+    // printf("arg count: %d\n", count);
 
-    for(int i=0; i<count; ++i){
-        printf("%s\n",buf[i]);
+    // Print all arguments as debug purpose
+    // for(int i=0; i<count; ++i){
+    //     printf("%s\n",buf[i]);
+    // }
+
+    // All commands are in root path
+    char *cmd_path=(char *)malloc(strlen(buf[0])+2);
+    *cmd_path='/';      // Be aware of ""->char* and ''->char
+    strcpy(cmd_path+1, buf[0]);
+
+    // See command full path
+    // printf("%s\n", cmd_path);
+
+
+    int pid=fork();
+
+    if(pid<0){
+        fprintf(2, "Fork error\n");
+        exit(1);
+    }
+    else if(pid>0){
+        wait(0);
+    }
+    else{
+        exec(cmd_path, buf);
     }
 
 
