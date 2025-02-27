@@ -1,8 +1,27 @@
+# xv6 Introduction
+
 xv6 is a re-implementation of Dennis Ritchie's and Ken Thompson's Unix
 Version 6 (v6).  xv6 loosely follows the structure and style of v6,
 but is implemented for a modern RISC-V multiprocessor using ANSI C.
 
-ACKNOWLEDGMENTS
+
+# INSTALLATION
+## SETUP
+
+1. Install tools from this [link](https://pdos.csail.mit.edu/6.828/2024/tools.html) 
+
+
+2. Start QEMU emulator and boot xv6
+    ```
+    make qemu
+    ```
+
+## Git Branches
+1. util -> implemented ***system utilities***
+2. net -> implemented ***network driver***
+3. fs -> ongoing implementation of ***symbolic links***
+
+# ACKNOWLEDGMENTS
 
 xv6 is inspired by John Lions's Commentary on UNIX 6th Edition (Peer
 to Peer Communications; ISBN: 1-57398-013-7; 1st edition (June 14,
