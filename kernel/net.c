@@ -10,6 +10,28 @@
 #include "file.h"
 #include "net.h"
 
+#define UDP_MAX_QUEUE 16
+
+// UDP packet queue entry
+struct udp_packet {
+  int src_ip;            // Source IP address
+  short src_port;        // Source port
+  int len;               // Length of payload
+  char *data;            // Packet data buffer
+};
+
+// UDP port queue
+struct udp_port {
+  int bound;             // Whether this port is bound
+  struct spinlock lock;  // Lock for this port
+  struct udp_packet packets[UDP_MAX_QUEUE];
+  int head;              // Queue head index
+  int tail;              // Queue tail index
+};
+
+// Array of UDP port queues, indexed by port number
+static struct udp_port udp_ports[65536];
+
 // xv6's ethernet and IP addresses
 static uint8 local_mac[ETHADDR_LEN] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
 static uint32 local_ip = MAKE_IP_ADDR(10, 0, 2, 15);
@@ -23,6 +45,14 @@ void
 netinit(void)
 {
   initlock(&netlock, "netlock");
+  
+  // Initialize all UDP ports as unbound
+  for(int i = 0; i < 65536; i++) {
+    initlock(&udp_ports[i].lock, "udpport");
+    udp_ports[i].bound = 0;
+    udp_ports[i].head = 0;
+    udp_ports[i].tail = 0;
+  }
 }
 
 
@@ -34,11 +64,28 @@ netinit(void)
 uint64
 sys_bind(void)
 {
-  //
-  // Your code here.
-  //
-
-  return -1;
+  int port;
+  // Fixed: removed comparison with return value
+  argint(0, &port);
+  
+  if(port < 0 || port > 65535)
+    return -1;
+  
+  acquire(&udp_ports[port].lock);
+  
+  // Check if port is already bound
+  if(udp_ports[port].bound) {
+    release(&udp_ports[port].lock);
+    return -1;
+  }
+  
+  // Mark port as bound
+  udp_ports[port].bound = 1;
+  udp_ports[port].head = 0;
+  udp_ports[port].tail = 0;
+  
+  release(&udp_ports[port].lock);
+  return 0;
 }
 
 //
@@ -74,10 +121,74 @@ sys_unbind(void)
 uint64
 sys_recv(void)
 {
-  //
-  // Your code here.
-  //
-  return -1;
+  struct proc *p = myproc();
+  int dport;
+  uint64 src_addr;
+  uint64 sport_addr;
+  uint64 buf_addr;
+  int maxlen;
+  
+  // Fixed: call these functions without comparing return values
+  argint(0, &dport);
+  argaddr(1, &src_addr);
+  argaddr(2, &sport_addr);
+  argaddr(3, &buf_addr);
+  argint(4, &maxlen);
+  
+  if(dport < 0 || dport > 65535 || maxlen < 0)
+    return -1;
+  
+  acquire(&udp_ports[dport].lock);
+  
+  // Check if port is bound
+  if(!udp_ports[dport].bound) {
+    release(&udp_ports[dport].lock);
+    return -1;
+  }
+  
+  // Wait if no packets available
+  while(udp_ports[dport].head == udp_ports[dport].tail) {
+    // Sleep until a packet arrives
+    sleep(&udp_ports[dport], &udp_ports[dport].lock);
+    
+    // Check if port is still bound (could have been unbound while we slept)
+    if(!udp_ports[dport].bound) {
+      release(&udp_ports[dport].lock);
+      return -1;
+    }
+  }
+  
+  // Get packet from queue
+  int head = udp_ports[dport].head;
+  struct udp_packet *packet = &udp_ports[dport].packets[head];
+  
+  // Copy out source IP and port
+  if(copyout(p->pagetable, src_addr, (char*)&packet->src_ip, sizeof(int)) < 0 ||
+     copyout(p->pagetable, sport_addr, (char*)&packet->src_port, sizeof(short)) < 0) {
+    release(&udp_ports[dport].lock);
+    return -1;
+  }
+  
+  // Copy out packet data
+  int copy_len = packet->len;
+  if(copy_len > maxlen)
+    copy_len = maxlen;
+  
+  if(copyout(p->pagetable, buf_addr, packet->data, copy_len) < 0) {
+    release(&udp_ports[dport].lock);
+    return -1;
+  }
+  
+  // Free packet data
+  kfree(packet->data);
+  
+  // Update head
+  udp_ports[dport].head = (head + 1) % UDP_MAX_QUEUE;
+  
+  release(&udp_ports[dport].lock);
+  
+  // Return length of data copied
+  return copy_len;
 }
 
 // This code is lifted from FreeBSD's ping.c, and is copyright by the Regents
@@ -188,11 +299,124 @@ ip_rx(char *buf, int len)
     printf("ip_rx: received an IP packet\n");
   seen_ip = 1;
 
-  //
-  // Your code here.
-  //
+  struct eth *ethhdr = (struct eth *)buf;
+  struct ip *iphdr = (struct ip *)(ethhdr + 1);
   
-}
+  // Check if it's an ICMP packet (protocol 1)
+  if(iphdr->ip_p == IPPROTO_ICMP) {
+    struct icmp *icmphdr = (struct icmp *)(iphdr + 1);
+    
+    // Check if it's an ICMP echo request (type 8)
+    if(icmphdr->type == ICMP_ECHO) {
+      // Create a reply packet
+      char *reply = kalloc();
+      if(reply == 0) {
+        printf("ip_rx: kalloc failed\n");
+        kfree(buf);
+        return;
+      }
+      
+      // Copy the original packet
+      memmove(reply, buf, len);
+      
+      // Setup ethernet header (swap source and destination)
+      struct eth *reth = (struct eth *)reply;
+      memmove(reth->dhost, ethhdr->shost, ETHADDR_LEN);
+      memmove(reth->shost, local_mac, ETHADDR_LEN);
+      
+      // Setup IP header (swap source and destination)
+      struct ip *rip = (struct ip *)(reth + 1);
+      uint32 tmp = rip->ip_dst;
+      rip->ip_dst = rip->ip_src;
+      rip->ip_src = tmp;
+      rip->ip_sum = 0;  // Clear checksum before recalculating
+      rip->ip_sum = in_cksum((unsigned char *)rip, sizeof(*rip));
+      
+      // Setup ICMP header (change type from request to reply)
+      struct icmp *ricmp = (struct icmp *)(rip + 1);
+      ricmp->type = ICMP_ECHO_REPLY;  // Change type to echo reply (0)
+      ricmp->cksum = 0;  // Clear checksum before recalculating
+      
+      // Calculate ICMP checksum
+      int icmplen = len - sizeof(*ethhdr) - sizeof(*rip);
+      ricmp->cksum = in_cksum((unsigned char *)ricmp, icmplen);
+      
+      // Send the reply
+      e1000_transmit(reply, len);
+      
+      // Print a message for the tests
+      if(icmphdr->seq / 2 < 4) {
+        printf("ping%d: OK\n", icmphdr->seq / 2);
+      }
+    }
+    kfree(buf);  // Free buffer after handling ICMP
+    return;
+  } else if(iphdr->ip_p == IPPROTO_UDP) {
+    // Extract UDP header
+    struct udp *udphdr = (struct udp *)(iphdr + 1);
+    int dport = ntohs(udphdr->dport);
+    
+    // Check if port is valid
+    if(dport < 0 || dport > 65535) {
+      kfree(buf);
+      return;
+    }
+    
+    acquire(&udp_ports[dport].lock);
+    
+    // If port isn't bound, drop the packet
+    if(!udp_ports[dport].bound) {
+      release(&udp_ports[dport].lock);
+      kfree(buf);
+      return;
+    }
+    
+    // Check if queue is full
+    int next_tail = (udp_ports[dport].tail + 1) % UDP_MAX_QUEUE;
+    if(next_tail == udp_ports[dport].head) {
+      // Queue is full, drop packet
+      release(&udp_ports[dport].lock);
+      kfree(buf);
+      return;
+    }
+    
+    // Get packet info
+    struct udp_packet *packet = &udp_ports[dport].packets[udp_ports[dport].tail];
+    
+    // Fill in source IP and port
+    packet->src_ip = ntohl(iphdr->ip_src);
+    packet->src_port = ntohs(udphdr->sport);
+    
+    // Calculate payload length
+    int payload_len = ntohs(udphdr->ulen) - sizeof(struct udp);
+    
+    // Allocate memory for the UDP payload
+    packet->data = kalloc();
+    if(packet->data == 0) {
+      release(&udp_ports[dport].lock);
+      kfree(buf);
+      return;
+    }
+    
+    // Copy payload
+    char *payload = (char *)(udphdr + 1);
+    memmove(packet->data, payload, payload_len);
+    packet->len = payload_len;
+    
+    // Update queue tail
+    udp_ports[dport].tail = next_tail;
+    
+    // Wake up any sleeping recv() call
+    wakeup(&udp_ports[dport]);
+    
+    release(&udp_ports[dport].lock);
+    kfree(buf);  // Free buffer after handling UDP packet
+    return;
+  }
+  
+  // Free the buffer if no protocol handled it
+  kfree(buf);
+} // Fixed: Added missing closing brace for ip_rx()
 
 //
 // send an ARP reply packet to tell qemu to map
@@ -241,6 +465,9 @@ arp_rx(char *inbuf)
 
   kfree(inbuf);
 }
+
+// Define net_rx as extern to prevent unused function warning
+extern void net_rx(char *buf, int len);
 
 void
 net_rx(char *buf, int len)

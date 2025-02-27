@@ -1,3 +1,6 @@
+// #define LAB_NET
+
+// #include "net.h"
 #include "types.h"
 #include "param.h"
 #include "memlayout.h"
@@ -6,6 +9,7 @@
 #include "proc.h"
 #include "defs.h"
 #include "e1000_dev.h"
+
 
 #define TX_RING_SIZE 16
 static struct tx_desc tx_ring[TX_RING_SIZE] __attribute__((aligned(16)));
@@ -149,6 +153,50 @@ e1000_recv(void)
   // Create and deliver a buf for each packet (using net_rx()).
   //
   printf("Ready to receive Packets\n");
+
+  // Getting the next ring postition, using E1000_RDT.
+  acquire(&e1000_lock);
+  
+  int cur = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+  // Checking if a new packet is available by checking for the E1000_RXD_STAT_DD flag in rx_ring[cur].status.
+  while((rx_ring[cur].status & E1000_RXD_STAT_DD) != 0){
+
+    int len = rx_ring[cur].length;
+    printf("Received packet of Position: %d length: %d\n", cur, len);
+
+    // Saving the current buffer pointer
+    char *buf = rx_bufs[cur];
+    
+    //Allocating a new buffer and program its head pointer into the descriptor. Clearing the descriptor's status bit to zero.
+
+    rx_bufs[cur] = kalloc();
+    if(rx_bufs[cur]== 0){
+      panic("e1000_recv");
+    }
+
+    // Updating the descriptor with the new buffer
+    rx_ring[cur].addr = (uint64) rx_bufs[cur];
+    rx_ring[cur].status = 0;
+
+    regs[E1000_RDT] = cur;
+
+    release(&e1000_lock);
+
+    // Deliver the packet to the network layer
+    net_rx(buf, len);
+
+    // Free the buffer
+    // kfree(buf);
+
+    acquire(&e1000_lock);
+
+
+    // Updating the ring position by adding one to E1000_RDT modulo RX_RING_SIZE.
+    cur = (cur + 1) % RX_RING_SIZE;
+  }
+
+  release(&e1000_lock);
 }
 
 void

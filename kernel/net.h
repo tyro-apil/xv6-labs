@@ -53,6 +53,19 @@ struct ip {
   uint32 ip_src, ip_dst;
 };
 
+// ICMP message types
+#define ICMP_ECHO_REPLY 0
+#define ICMP_ECHO 8
+
+// ICMP packet header (comes after an IP header)
+struct icmp {
+  uint8 type;     // message type
+  uint8 code;     // type sub-code
+  uint16 cksum;   // checksum
+  uint16 id;      // identifier
+  uint16 seq;     // sequence number
+} __attribute__((packed));
+
 #define IPPROTO_ICMP 1  // Control message protocol
 #define IPPROTO_TCP  6  // Transmission control protocol
 #define IPPROTO_UDP  17 // User datagram protocol
