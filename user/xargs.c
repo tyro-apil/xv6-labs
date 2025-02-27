@@ -7,19 +7,40 @@
 
 int
 main(int argc, char *argv[])
-{
+{   
+    char *buf[MAXARG];
 
-    char buf[512];
+    int count=0;
 
-    while(read(0, buf, sizeof(char))==sizeof(char)){
-        buf[1]=0;
-        if(strcmp(buf,"\r") ==0){
-            continue;
+    for(int i=1; i<argc; ++i){
+        buf[i-1]=argv[i];
+        count++;
+    }
+
+    char line[512], c;
+    int j=0;
+
+    while(read(0, &c, sizeof(char))==sizeof(char)){
+        
+        if(c == '\n'){
+            // printf("new line\n");
+            line[j]='\0';
+
+            // allocate memory 
+            buf[count] = (char *)malloc(j+1);
+            
+            strcpy(buf[count], line);
+            count++;
+            j=0;
         }
-        if(strcmp(buf,"\n") ==0){
-            continue;
+        else{
+
+            line[j++]=c;
         }
-        printf("%s\n", buf);
+    }
+
+    for(int i=0; i<count; ++i){
+        printf("%s\n",buf[i]);
     }
 
 
