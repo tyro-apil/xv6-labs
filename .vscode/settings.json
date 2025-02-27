@@ -1,6 +1,7 @@
 {
     "files.associations": {
         "spinlock.h": "c",
-        "types.h": "c"
+        "types.h": "c",
+        "e1000_dev.h": "c"
     }
 }
